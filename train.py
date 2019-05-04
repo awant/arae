@@ -1,7 +1,8 @@
 from opts import configure_args
 from data import Corpus
 from batchifier import Batchifier
-from models import Seq2Seq, Gen, Critic
+from models import Seq2Seq, Gen, Critic, KenlmModel
+from models import sample_noise, generate_sentences
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
@@ -14,10 +15,6 @@ logger = logging.getLogger()
 Autoencoder, Generator, Discriminator = Seq2Seq, Gen, Critic
 
 
-def sample_noise(batch_size, internal_repr_size):
-    return torch.Tensor(batch_size, internal_repr_size).normal_(0, 1)
-
-
 def form_log_line(metrics):
     metrics['ppl'] = math.exp(metrics['loss_ae'] / metrics['niter_clear'])  # wrong metric
     metrics['acc'] = metrics['nmatches'] / metrics['ntokens']
@@ -27,6 +24,15 @@ def form_log_line(metrics):
            'ppl {ppl:8.2f} | acc {acc:8.2f} | '\
            'loss_d {loss_d:.8f} | loss_g {loss_g:.8f}'.format(**metrics)
     return line
+
+
+def form_eval_log_line(metrics):
+    metrics['ppl'] = math.exp(metrics['loss_ae'] / metrics['niter_clear'])  # wrong metric
+    metrics['acc'] = metrics['nmatches'] / metrics['ntokens']
+    line = '[{epoch:3d}/{nepoch:3d}] | test ppl {ppl:8.2f} | test acc {acc:8.2f}'
+    if metrics['forward_ppl'] > 0:
+        line += ' | forward ppl {forward_ppl:8.4f}'
+    return line.format(**metrics)
 
 
 def train_autoencoder(autoencoder, optim_ae, criterion_ae, batch, device):
@@ -139,7 +145,6 @@ def train_generator(generator, discriminator, optim_gen, batch_size):
     metrics = {
         'gen_loss': fake_repr.mean().cpu()
     }
-
     return metrics
 
 
@@ -190,19 +195,39 @@ def train_epoch(models, optimizers, criterions, batchifier, args, epoch_idx, dev
             autoencoder.noise_anneal(args.noise_anneal)
 
 
-def evaluate(models, batchifier):
+def evaluate(models, criterions, batchifier, dictionary, kenlm, kenlm_eval_size=1000, maxlen=15):
     autoencoder, generator, discriminator = models
+    criterion_ae, = criterions
     autoencoder.eval()
     generator.eval()
     discriminator.eval()
 
-    ...
+    metrics = Metrics()
+    with torch.no_grad():
+        for batch in batchifier:
+            src, tgt, lengths = [obj.to(device) for obj in batch]
+
+            out = autoencoder(src, lengths, noise=False)
+            plain_out, plain_tgt = out.view(-1, out.size(-1)), tgt.view(-1)
+            metrics['loss_ae'] += criterion_ae(plain_out, plain_tgt)
+
+            nmatches = (plain_out.argmax(dim=-1) == plain_tgt).float() * (plain_tgt == criterion_ae.ignore_index)
+            metrics['nmatches'] += nmatches
+            metrics['ntokens'] += lengths.sum()
+
+    if kenlm is not None:
+        sentences = generate_sentences(autoencoder, generator, dictionary, count=kenlm_eval_size, maxlen=maxlen)
+        forward_ppl = kenlm.get_ppl(sentences)
+        metrics['forward_ppl'] = forward_ppl
+
+    line = form_eval_log_line(metrics)
+    logger.info(line)
 
 
-def train(models, optimizers, criterions, train_batchifier, test_batchifier, args, device):
+def train(models, optimizers, criterions, train_batchifier, test_batchifier, args, kenlm, maxlen, device):
     for epoch_idx in range(1, args.epochs+1):
         train_epoch(models, optimizers, criterions, train_batchifier, args, epoch_idx, device)
-        evaluate(models, test_batchifier)
+        evaluate(models, criterions, test_batchifier, kenlm, maxlen)
 
 
 if __name__ == '__main__':
@@ -213,6 +238,7 @@ if __name__ == '__main__':
     corpus = Corpus(args.data, n_tokens=args.vocab_size)
     vocab = corpus.dictionary
     pad_idx = vocab.pad_idx
+    maxlen = corpus.maxlen
 
     train_batchifier = Batchifier(corpus.train, pad_idx, args.batch_size)
     test_batchifier = Batchifier(corpus.test, pad_idx, args.batch_size)
@@ -222,6 +248,8 @@ if __name__ == '__main__':
     generator = Generator.from_opts(args).to(device)
     discriminator = Discriminator.from_opts(args).to(device)
     models = (autoencoder, generator, discriminator)
+    # Kenlm model
+    kenlm = KenlmModel(args.kenlm_model) if args.kenlm_model else None
 
     # Optimizers
     optim_ae = optim.SGD(autoencoder.parameters(), lr=args.lr_ae)
@@ -233,4 +261,4 @@ if __name__ == '__main__':
     criterion_ae = torch.nn.CrossEntropyLoss(ignore_index=pad_idx)
     criterions = (criterion_ae,)
 
-    train(models, optimizers, criterions, train_batchifier, test_batchifier, args, device)
+    train(models, optimizers, criterions, train_batchifier, test_batchifier, args, kenlm, maxlen, device)

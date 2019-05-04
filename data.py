@@ -31,12 +31,33 @@ class Dictionary(object):
     def convert_token2idx(self, token):
         return self.token2idx.get(token, self.unk_idx)
 
+    def convert_idx2token(self, idx):
+        return self.idx2token[idx]
+
     def convert_tokens2idxs(self, raw_tokens):
         '''
         :param raw_tokens: list of tokens w/o special tokens
         :return: idxs: list of indexes
         '''
         return list(map(self.convert_token2idx, [self.sos] + raw_tokens + [self.eos]))
+
+    def convert_idxs2tokens(self, idxs):
+        return list(map(self.convert_idx2token, idxs))
+
+    def convert_idxs2tokens_prettified(self, idxs):
+        ''' The same as convert_idxs2tokens, but remove <sos>, <eos> and all after <eos>
+        :param idxs: list of indexes to convert
+        :return: list of tokens
+        '''
+        if not idxs:
+            return None
+        try:
+            first_eos_idx = idxs.index(self.eos_idx)
+        except ValueError:
+            first_eos_idx = len(idxs)
+        start_idx = 1 if idxs[0] == self.sos_idx else 0
+        tokens = self.convert_idxs2tokens(idxs[start_idx:first_eos_idx])
+        return tokens
 
     @property
     def pad(self):
@@ -79,6 +100,7 @@ class Corpus(object):
     def __init__(self, path, n_tokens, sep=' '):
         self._sep = sep
         self.dictionary = Dictionary()
+        self.maxlen = 0
 
         paths = {}
         self._labels = ['train', 'test']
@@ -110,4 +132,5 @@ class Corpus(object):
             tokens = line.split(self._sep)
             idxs = self.dictionary.convert_tokens2idxs(tokens)
             lines_idxs.append(idxs)
+            self.maxlen = max(self.maxlen, len(idxs))
         return lines_idxs
