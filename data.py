@@ -43,12 +43,24 @@ class Dictionary(object):
         return self.PAD
 
     @property
+    def pad_idx(self):
+        return self.convert_token2idx(self.pad)
+
+    @property
     def sos(self):
         return self.SOS
 
     @property
+    def sos_idx(self):
+        return self.convert_token2idx(self.sos)
+
+    @property
     def eos(self):
         return self.EOS
+
+    @property
+    def eos_idx(self):
+        return self.convert_token2idx(self.eos)
 
     @property
     def unk(self):
@@ -56,7 +68,7 @@ class Dictionary(object):
 
     @property
     def unk_idx(self):
-        return self.token2idx[self.unk]
+        return self.convert_token2idx(self.unk)
 
     @property
     def special_tokens(self):

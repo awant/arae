@@ -4,18 +4,22 @@ import torch
 
 
 class Batchifier(object):
-    def __init__(self, idxs, pad_idx, batch_size, shuffle):
+    def __init__(self, idxs, pad_idx, batch_size, shuffle=False):
         if shuffle:
             raise RuntimeError("Not implemented yet")
 
         self.batch_size = batch_size
         self.nbatches = len(idxs) // batch_size
         self.pad_idx = pad_idx
-        self.current_idx = 0
+        self.current_idx = None
         self.batches = []
-        self.build_data(idxs)
+        self._build_data(idxs)
+        self.reset()
 
-    def sort_batch(self, batch):
+    def reset(self):
+        self.current_idx = 0
+
+    def _sort_batch(self, batch):
         if not isinstance(batch, np.ndarray):
             batch = np.array(batch)
         # line contains sos, eos tokens additionally
@@ -34,10 +38,10 @@ class Batchifier(object):
         src, tgt, lengths = torch.LongTensor(src), torch.LongTensor(tgt), torch.LongTensor(lengths)
         return src, tgt, lengths
 
-    def build_data(self, idxs):
+    def _build_data(self, idxs):
         for batch_idx in range(self.nbatches):
             batch = idxs[batch_idx*self.batch_size: (batch_idx+1)*self.batch_size]
-            src, tgt, lengths = self.sort_batch(batch)  # should sort batches to pass into lstm with padding
+            src, tgt, lengths = self._sort_batch(batch)  # should sort batches to pass into lstm with padding
             self.batches.append((src, tgt, lengths))
 
     def __iter__(self):
