@@ -20,7 +20,7 @@ Autoencoder, Generator, Discriminator = Seq2Seq, Gen, Critic
 def form_log_line(metrics):
     metrics['ppl'] = math.exp(metrics['loss_ae'] / metrics['niter_clear'])  # wrong metric
     metrics['acc'] = metrics['nmatches'] / metrics['ntokens'] * 100
-    metrics['loss_d'] = (metrics['discr_fake_loss'] - metrics['discr_real_loss']) / metrics['niter_clear']
+    metrics['loss_d'] = metrics['discr_loss'] / metrics['niter_clear']
     metrics['loss_g'] = metrics['gen_loss'] / metrics['niter_clear']
     line = '[{epoch:3d}/{nepoch:3d}][{iter:5d}/{niter:5d}] | ' \
            'ppl {ppl:8.2f} | acc {acc:4.2f} | '\
@@ -98,22 +98,19 @@ def train_discriminator(models, optim_discr, batch, gan_gp_lambda, device):
 
     real_discr_out = discriminator(real_repr.detach())  # [B, 1]
     fake_discr_out = discriminator(fake_repr.detach())
-    loss = (real_discr_out - fake_discr_out).mean()
-    loss.backward()
+    discr_loss = (real_discr_out - fake_discr_out).mean()
 
     gradient_penalty = calc_gradient_penalty(discriminator, real_repr, fake_repr, gan_gp_lambda, device)
-    gradient_penalty.backward()
+    (discr_loss + gradient_penalty).backward()  # basically: WGAN-GP
 
     optim_discr.step()
 
     metrics = {
-        'discr_real_loss': real_discr_out.mean().cpu().item(),
-        'discr_fake_loss': fake_discr_out.mean().cpu().item()
+        'discr_loss': discr_loss.cpu().item(),
     }
     return metrics
 
-
-def train_discr_autoencoder(autoencoder, optim_ae, batch, grad_lambda, clip):
+def train_encoder_by_discriminator(autoencoder, optim_ae, batch, grad_lambda, clip):
     autoencoder.train()
     discriminator.eval()
     optim_ae.zero_grad()
@@ -181,12 +178,16 @@ def train_epoch(models, optimizers, criterions, batchifier, args, epoch_idx, dev
         if batch_idx % niters_autoencoder == 0:  # training GAN part
             for _ in range(niters_gan):
                 for _ in range(niters_discriminator):
+                    # loss = (D(enc(src)) - D(G(noise))).mean() + GP
                     discr_metrics = train_discriminator(models, optim_discr, batchifier.get_random(),
                                                         args.gan_gp_lambda, device)
                     metrics.accum(discr_metrics)
                 for _ in range(niters_discr_autoencoder):
-                    train_discr_autoencoder(autoencoder, optim_ae, batchifier.get_random(), args.grad_lambda, args.clip)
+                    # loss = -D(enc(src))
+                    train_encoder_by_discriminator(autoencoder, optim_ae, batchifier.get_random(), args.grad_lambda,
+                                                   args.clip)
                 for _ in range(niters_generator):
+                    # loss = D(G(noise))
                     gen_metrics = train_generator(generator, discriminator, optim_gen, args.batch_size)
                     metrics.accum(gen_metrics)
         if batch_idx % args.print_every == 0:
