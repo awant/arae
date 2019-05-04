@@ -6,21 +6,21 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 class Seq2Seq(nn.Module):
     def __init__(self, emsize, nhidden, ntokens, nlayers, noise_r=0.2, dropout=0):
         super().__init__()
-
         self._noise_r = noise_r
         self.internal_repr_size = nhidden
-
         self.enc_embedding = nn.Embedding(ntokens, emsize)
         self.dec_embedding = nn.Embedding(ntokens, emsize)
-
         self.encoder = nn.LSTM(input_size=emsize, hidden_size=nhidden, num_layers=nlayers, dropout=dropout,
                                batch_first=True)
-
         self.decoder = nn.LSTM(input_size=emsize + nhidden, hidden_size=nhidden, num_layers=1, dropout=dropout,
                                batch_first=True)
         self.linear = nn.Linear(nhidden, ntokens)
 
         self.init_weights()
+
+    @classmethod
+    def from_opts(cls, opts):
+        return cls(opts.emsize, opts.nhidden, opts.vocab_size, opts.nlayers, opts.noise_r, opts.dropout)
 
     def init_weights(self):
         initrange = 0.1
@@ -37,6 +37,7 @@ class Seq2Seq(nn.Module):
 
     def forward(self, inp, lengths, noise=False):
         internal_repr = self.encode(inp, lengths, noise)  # [B, H]
+        maxlen = lengths.max()
         out = self.decode(internal_repr, inp, lengths)
         return out
 
@@ -47,22 +48,21 @@ class Seq2Seq(nn.Module):
         :param noise: should add noise for out representation
         :return: internal representation of inp, size: [B, H]
         '''
-
         embs = self.enc_embedding(inp)  # [B, L, E]
         packed_embeddings = pack_padded_sequence(embs, lengths=lengths, batch_first=True)
         _, (h_n, c_n) = self.encoder(packed_embeddings)
 
         internal_repr = h_n[-1]  # getting last layer, size: [B, H]
-        internal_repr /= torch.norm(internal_repr, p=2, dim=1, keepdim=True)
+        internal_repr = internal_repr / torch.norm(internal_repr, p=2, dim=1, keepdim=True)
 
         if noise:
-            assert self.noise_r > 0
+            assert self._noise_r > 0
             gauss_noise = torch.normal(mean=torch.zeros_like(internal_repr), std=self._noise_r)
             internal_repr += gauss_noise
 
         return internal_repr
 
-    def decode(self, internal_repr, maxlen, inp, lengths):
+    def decode(self, internal_repr, inp, lengths):
         '''Decoding an internal representation into tokens probs
         :param internal_repr: internal representation of inp tokens, size: [B, H]
         :param maxlen: max length of lines
@@ -70,6 +70,7 @@ class Seq2Seq(nn.Module):
         :param lengths: lengths of input tokens, size: [B]
         :return: unsoftmaxed probs
         '''
+        maxlen = lengths.max()
 
         # copy the internal representation for every token in line
         hiddens = internal_repr.unsqueeze(1).repeat(1, maxlen, 1)  # size: [B, L, H]

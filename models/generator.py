@@ -28,9 +28,14 @@ class Gen(nn.Module):
 
         self.init_weights()
 
+    @classmethod
+    def from_opts(cls, opts):
+        layer_sizes = list(map(int, opts.arch_g.split('-')))
+        return cls(opts.z_size, opts.nhidden, layer_sizes)
+
     def init_weights(self):
         init_std = 0.02
-        for layer in self.layers:
+        for layer in self.layer:
             try:
                 layer.weight.data.normal_(0, init_std)
                 layer.bias.data.fill_(0)
@@ -38,4 +43,4 @@ class Gen(nn.Module):
                 pass
 
     def forward(self, inp):
-        return self.layers(inp)
+        return self.layer(inp)

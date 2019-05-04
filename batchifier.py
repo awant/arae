@@ -47,6 +47,9 @@ class Batchifier(object):
     def __iter__(self):
         return self
 
+    def __len__(self):
+        return self.nbatches
+
     def __next__(self):
         try:
             result = self.batches[self.current_idx]

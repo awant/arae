@@ -4,34 +4,36 @@ from batchifier import Batchifier
 from models import Seq2Seq, Gen, Critic, KenlmModel
 from models import sample_noise, generate_sentences
 import torch
+from torch import nn
 import torch.optim as optim
-import torch.nn.functional as F
 import logging
 from utils import Metrics
 import math
 
 # Global sets
-logger = logging.getLogger()
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
 Autoencoder, Generator, Discriminator = Seq2Seq, Gen, Critic
 
 
 def form_log_line(metrics):
     metrics['ppl'] = math.exp(metrics['loss_ae'] / metrics['niter_clear'])  # wrong metric
-    metrics['acc'] = metrics['nmatches'] / metrics['ntokens']
+    metrics['acc'] = metrics['nmatches'] / metrics['ntokens'] * 100
     metrics['loss_d'] = (metrics['discr_fake_loss'] - metrics['discr_real_loss']) / metrics['niter_clear']
     metrics['loss_g'] = metrics['gen_loss'] / metrics['niter_clear']
     line = '[{epoch:3d}/{nepoch:3d}][{iter:5d}/{niter:5d}] | ' \
-           'ppl {ppl:8.2f} | acc {acc:8.2f} | '\
-           'loss_d {loss_d:.8f} | loss_g {loss_g:.8f}'.format(**metrics)
+           'ppl {ppl:8.2f} | acc {acc:4.2f} | '\
+           'loss_d {loss_d:.3f} | loss_g {loss_g:.3f}'.format(**metrics)
     return line
 
 
 def form_eval_log_line(metrics):
     metrics['ppl'] = math.exp(metrics['loss_ae'] / metrics['niter_clear'])  # wrong metric
     metrics['acc'] = metrics['nmatches'] / metrics['ntokens']
-    line = '[{epoch:3d}/{nepoch:3d}] | test ppl {ppl:8.2f} | test acc {acc:8.2f}'
+    line = '[{epoch:3d}/{nepoch:3d}] | test ppl {ppl:8.2f} | test acc {acc:4.2f}'
     if metrics['forward_ppl'] > 0:
-        line += ' | forward ppl {forward_ppl:8.4f}'
+        line += ' | forward ppl {forward_ppl:8.2f}'
     return line.format(**metrics)
 
 
@@ -47,15 +49,16 @@ def train_autoencoder(autoencoder, optim_ae, criterion_ae, batch, device):
 
     loss = criterion_ae(plain_out, plain_tgt)
     loss.backward()
-    torch.nn.utils.clip_grad_norm(autoencoder.parameters(), args.clip)
+    nn.utils.clip_grad_norm_(autoencoder.parameters(), args.clip)
     optim_ae.step()
 
     # compute metrics for evaluation
-    nmatches = (plain_out.argmax(dim=-1) == plain_tgt).float() * (plain_tgt == criterion_ae.ignore_index)
-    ntokens = lengths.sum()
+    nmatches = (plain_out.argmax(dim=-1) == plain_tgt).float() * (plain_tgt != criterion_ae.ignore_index).float()
+    nmatches = nmatches.sum().cpu().item()
+    ntokens = lengths.sum().cpu().item()
 
     metrics = {
-        'loss_ae': loss.cpu(),
+        'loss_ae': loss.cpu().item(),
         'ntokens': ntokens,
         'nmatches': nmatches
     }
@@ -88,16 +91,15 @@ def train_discriminator(models, optim_discr, batch, gan_gp_lambda, device):
     # src: [B, L], tgt: [B, L], lengths: [B]
     src, tgt, lengths = [obj.to(device) for obj in batch]
     batch_size = src.size(0)
-    internal_repr_size = autoencoder.internal_repr_size
 
-    noise = sample_noise(batch_size, internal_repr_size)
-    with torch.no_grad():
-        real_repr = autoencoder.encode(src, lengths, noise=False)  # [B, H]
-        fake_repr = generator(noise)  # [B, H]
+    noise = sample_noise(batch_size, generator.inp_size)
+    real_repr = autoencoder.encode(src, lengths, noise=False)  # [B, H]
+    fake_repr = generator(noise)  # [B, H]
 
     real_discr_out = discriminator(real_repr.detach())  # [B, 1]
     fake_discr_out = discriminator(fake_repr.detach())
-    (real_discr_out - fake_discr_out).backward()
+    loss = (real_discr_out - fake_discr_out).mean()
+    loss.backward()
 
     gradient_penalty = calc_gradient_penalty(discriminator, real_repr, fake_repr, gan_gp_lambda, device)
     gradient_penalty.backward()
@@ -105,8 +107,8 @@ def train_discriminator(models, optim_discr, batch, gan_gp_lambda, device):
     optim_discr.step()
 
     metrics = {
-        'discr_real_loss': real_discr_out.mean().cpu(),
-        'discr_fake_loss': fake_discr_out.mean().cpu()
+        'discr_real_loss': real_discr_out.mean().cpu().item(),
+        'discr_fake_loss': fake_discr_out.mean().cpu().item()
     }
     return metrics
 
@@ -122,12 +124,13 @@ def train_discr_autoencoder(autoencoder, optim_ae, batch, grad_lambda, clip):
     real_repr = autoencoder.encode(src, lengths, noise=False)
     real_repr.register_hook(lambda grad: grad * grad_lambda)
 
-    neg_real_discr_out = -discriminator(real_repr)
-    neg_real_discr_out.backward()
-    torch.nn.utils.clip_grad_norm(autoencoder.parameters(), clip)
+    discr_out = discriminator(real_repr)
+    discr_loss = -discr_out.mean()
+    discr_loss.backward()
+    nn.utils.clip_grad_norm_(autoencoder.parameters(), clip)
 
     optim_ae.step()
-    return -neg_real_discr_out.mean().cpu()
+    return -discr_loss.cpu().item()
 
 
 def train_generator(generator, discriminator, optim_gen, batch_size):
@@ -135,15 +138,15 @@ def train_generator(generator, discriminator, optim_gen, batch_size):
     discriminator.eval()
     optim_gen.zero_grad()
 
-    internal_repr_size = generator.inp_size
-    noise = sample_noise(batch_size, internal_repr_size)
+    noise = sample_noise(batch_size, generator.inp_size)
     fake_repr = generator(noise)
     fake_discr_out = discriminator(fake_repr)
-    fake_discr_out.backward()
+    fake_discr_loss = fake_discr_out.mean()
+    fake_discr_loss.backward()
     optim_gen.step()
 
     metrics = {
-        'gen_loss': fake_repr.mean().cpu()
+        'gen_loss': fake_discr_loss.cpu().item()
     }
     return metrics
 
@@ -193,6 +196,7 @@ def train_epoch(models, optimizers, criterions, batchifier, args, epoch_idx, dev
 
         if batch_idx % anneal_noise_every == 0:
             autoencoder.noise_anneal(args.noise_anneal)
+    batchifier.reset()
 
 
 def evaluate(models, criterions, batchifier, dictionary, kenlm, kenlm_eval_size=1000, maxlen=15):
@@ -209,11 +213,11 @@ def evaluate(models, criterions, batchifier, dictionary, kenlm, kenlm_eval_size=
 
             out = autoencoder(src, lengths, noise=False)
             plain_out, plain_tgt = out.view(-1, out.size(-1)), tgt.view(-1)
-            metrics['loss_ae'] += criterion_ae(plain_out, plain_tgt)
+            metrics['loss_ae'] += criterion_ae(plain_out, plain_tgt).cpu().item()
 
-            nmatches = (plain_out.argmax(dim=-1) == plain_tgt).float() * (plain_tgt == criterion_ae.ignore_index)
-            metrics['nmatches'] += nmatches
-            metrics['ntokens'] += lengths.sum()
+            nmatches = (plain_out.argmax(dim=-1) == plain_tgt).float()*(plain_tgt == criterion_ae.ignore_index).float()
+            metrics['nmatches'] += nmatches.sum().cpu().item()
+            metrics['ntokens'] += lengths.sum().cpu().item()
 
     if kenlm is not None:
         sentences = generate_sentences(autoencoder, generator, dictionary, count=kenlm_eval_size, maxlen=maxlen)
@@ -230,20 +234,27 @@ def train(models, optimizers, criterions, train_batchifier, test_batchifier, arg
         evaluate(models, criterions, test_batchifier, kenlm, maxlen)
 
 
+def dump_model():
+    pass
+
+
 if __name__ == '__main__':
     args = configure_args()
     device = torch.device('cuda' if args.gpu > -1 else 'cpu')
 
     # Data
+    logger.info('Building data...')
     corpus = Corpus(args.data, n_tokens=args.vocab_size)
     vocab = corpus.dictionary
     pad_idx = vocab.pad_idx
     maxlen = corpus.maxlen
 
+    logger.info('Building batchifier...')
     train_batchifier = Batchifier(corpus.train, pad_idx, args.batch_size)
     test_batchifier = Batchifier(corpus.test, pad_idx, args.batch_size)
 
     # Model
+    logger.info('Building models...')
     autoencoder = Autoencoder.from_opts(args).to(device)
     generator = Generator.from_opts(args).to(device)
     discriminator = Discriminator.from_opts(args).to(device)
@@ -261,4 +272,7 @@ if __name__ == '__main__':
     criterion_ae = torch.nn.CrossEntropyLoss(ignore_index=pad_idx)
     criterions = (criterion_ae,)
 
+    logger.info('Training...')
     train(models, optimizers, criterions, train_batchifier, test_batchifier, args, kenlm, maxlen, device)
+    logger.info('Dumping model...')
+    dump_model()

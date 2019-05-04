@@ -3,9 +3,9 @@ import argparse
 
 def configure_args():
     parser = argparse.ArgumentParser(description='Training ARAE model')
-    parser.add_argument('--data_oneb', type=str, required=True,
+    parser.add_argument('--data', type=str, default='data_oneb',
                         help='path to preprocessed data_oneb corpus with train.txt, test.txt with space as separator')
-    parser.add_argument('--save', type=str, required=True, help='path for best .pt checkpoint')
+    parser.add_argument('--save', type=str, help='path for best .pt checkpoint')
 
     parser.add_argument('--vocab_size', type=int, default=30000, help='vocabulary size')
     parser.add_argument('--emsize', type=int, default=500, help='size of embeddings')
@@ -47,6 +47,6 @@ def configure_args():
 
     parser.add_argument('--kenlm_model', type=str, help='path to reference kenlm model for computing forward ppl')
     parser.add_argument('--gpu', type=int, default=-1, help='device to use. = -1 - don\'t use gpu')
-    parser.add_argument('--print_every', type=int, default=100, help='show metrics for train dataset')
+    parser.add_argument('--print_every', type=int, default=10, help='show metrics for train dataset')
 
     return parser.parse_args()

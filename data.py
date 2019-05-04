@@ -3,7 +3,7 @@ import logging
 from utils import iget_line
 from collections import Counter
 
-logger = logging.getLogger()
+logger = logging.getLogger(__name__)
 
 
 class Dictionary(object):
@@ -15,7 +15,6 @@ class Dictionary(object):
     def __init__(self):
         self.token2idx = {}
         self.idx2token = {}
-
         for special_token in self.special_tokens:
             self.add_token(special_token)
 
@@ -65,7 +64,7 @@ class Dictionary(object):
 
     @property
     def pad_idx(self):
-        return self.convert_token2idx(self.pad)
+        return self.token2idx.get(self.pad)
 
     @property
     def sos(self):
@@ -73,7 +72,7 @@ class Dictionary(object):
 
     @property
     def sos_idx(self):
-        return self.convert_token2idx(self.sos)
+        return self.token2idx.get(self.sos)
 
     @property
     def eos(self):
@@ -81,7 +80,7 @@ class Dictionary(object):
 
     @property
     def eos_idx(self):
-        return self.convert_token2idx(self.eos)
+        return self.token2idx.get(self.eos)
 
     @property
     def unk(self):
@@ -89,7 +88,7 @@ class Dictionary(object):
 
     @property
     def unk_idx(self):
-        return self.convert_token2idx(self.unk)
+        return self.token2idx.get(self.unk)
 
     @property
     def special_tokens(self):
@@ -123,7 +122,7 @@ class Corpus(object):
                 tokens = line.split(self._sep)
                 all_tokens += tokens
         counter = Counter(all_tokens)
-        for token, _, in counter.most_common(n_tokens):
+        for token, _ in counter.most_common(n_tokens-len(self.dictionary.special_tokens)):
             self.dictionary.add_token(token)
 
     def tokenize(self, path):

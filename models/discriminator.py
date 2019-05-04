@@ -27,9 +27,14 @@ class Critic(nn.Module):
 
         self.init_weights()
 
+    @classmethod
+    def from_opts(cls, opts):
+        layer_sizes = list(map(int, opts.arch_d.split('-')))
+        return cls(opts.nhidden, 1, layer_sizes)
+
     def init_weights(self):
         init_std = 0.02
-        for layer in self.layers:
+        for layer in self.layer:
             try:
                 layer.weight.data.normal_(0, init_std)
                 layer.bias.data.fill_(0)
@@ -37,4 +42,4 @@ class Critic(nn.Module):
                 pass
 
     def forward(self, inp):
-        return self.layers(inp)
+        return self.layer(inp)
