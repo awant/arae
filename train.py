@@ -6,7 +6,8 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 import logging
-
+from utils import Metrics
+import math
 
 # Global sets
 logger = logging.getLogger()
@@ -17,8 +18,15 @@ def sample_noise(batch_size, internal_repr_size):
     return torch.Tensor(batch_size, internal_repr_size).normal_(0, 1)
 
 
-def form_log_line(metrics, niters):
-    return ''
+def form_log_line(metrics):
+    metrics['ppl'] = math.exp(metrics['loss_ae'] / metrics['niter_clear'])  # wrong metric
+    metrics['acc'] = metrics['nmatches'] / metrics['ntokens']
+    metrics['loss_d'] = (metrics['discr_fake_loss'] - metrics['discr_real_loss']) / metrics['niter_clear']
+    metrics['loss_g'] = metrics['gen_loss'] / metrics['niter_clear']
+    line = '[{epoch:3d}/{nepoch:3d}][{iter:5d}/{niter:5d}] | ' \
+           'ppl {ppl:8.2f} | acc {acc:8.2f} | '\
+           'loss_d {loss_d:.8f} | loss_g {loss_g:.8f}'.format(**metrics)
+    return line
 
 
 def train_autoencoder(autoencoder, optim_ae, criterion_ae, batch, device):
@@ -135,7 +143,7 @@ def train_generator(generator, discriminator, optim_gen, batch_size):
     return metrics
 
 
-def train_epoch(models, optimizers, criterions, batchifier, args, device):
+def train_epoch(models, optimizers, criterions, batchifier, args, epoch_idx, device):
     autoencoder, generator, discriminator = models
     optim_ae, optim_gen, optim_discr = optimizers
     criterion_ae, = criterions
@@ -148,23 +156,35 @@ def train_epoch(models, optimizers, criterions, batchifier, args, device):
 
     anneal_noise_every = 100  # hardcoded for now
 
-    for batch_idx, batch in enumerate(batchifier, start=1):
-        metrics = train_autoencoder(autoencoder, optim_ae, batch, device)
+    def init_metrics():
+        metrics = Metrics(
+            epoch=epoch_idx,
+            nepoch=args.epochs,
+            niter=len(batchifier),
+            niter_clear=args.print_every
+        )
+        return metrics
 
+    metrics = init_metrics()
+    for batch_idx, batch in enumerate(batchifier, start=1):
+        metrics['iter'] = batch_idx
+        metrics_ae = train_autoencoder(autoencoder, optim_ae, criterion_ae, batch, device)
+        metrics.accum(metrics_ae)
         if batch_idx % niters_autoencoder == 0:  # training GAN part
             for _ in range(niters_gan):
                 for _ in range(niters_discriminator):
                     discr_metrics = train_discriminator(models, optim_discr, batchifier.get_random(),
                                                         args.gan_gp_lambda, device)
-                    metrics.update(discr_metrics)
+                    metrics.accum(discr_metrics)
                 for _ in range(niters_discr_autoencoder):
                     train_discr_autoencoder(autoencoder, optim_ae, batchifier.get_random(), args.grad_lambda, args.clip)
                 for _ in range(niters_generator):
                     gen_metrics = train_generator(generator, discriminator, optim_gen, args.batch_size)
-                    metrics.update(gen_metrics)
+                    metrics.accum(gen_metrics)
         if batch_idx % args.print_every == 0:
-            line = form_log_line(metrics, args.print_every)
+            line = form_log_line(metrics)
             logger.info(line)
+            metrics = init_metrics()
 
         if batch_idx % anneal_noise_every == 0:
             autoencoder.noise_anneal(args.noise_anneal)
@@ -181,7 +201,7 @@ def evaluate(models, batchifier):
 
 def train(models, optimizers, criterions, train_batchifier, test_batchifier, args, device):
     for epoch_idx in range(1, args.epochs+1):
-        train_epoch(models, optimizers, criterions, train_batchifier, args, device)
+        train_epoch(models, optimizers, criterions, train_batchifier, args, epoch_idx, device)
         evaluate(models, test_batchifier)
 
 
