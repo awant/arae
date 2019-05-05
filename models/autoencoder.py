@@ -35,9 +35,10 @@ class Seq2Seq(nn.Module):
         self.linear.weight.data.uniform_(-initrange, initrange)
         self.linear.bias.data.fill_(0)
 
-    def forward(self, inp, lengths, noise=False):
+    def forward(self, inp, lengths, encode_only=False, noise=False):
         internal_repr = self.encode(inp, lengths, noise)  # [B, H]
-        maxlen = lengths.max()
+        if encode_only:
+            return internal_repr
         out = self.decode(internal_repr, inp, lengths)
         return out
 

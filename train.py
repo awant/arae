@@ -83,25 +83,29 @@ def calc_gradient_penalty(discriminator, real_data, fake_data, gan_gp_lambda, de
 
 def train_discriminator(models, optim_discr, batch, gan_gp_lambda, device):
     autoencoder, generator, discriminator = models
+    discriminator.train()
     autoencoder.eval()
     generator.eval()
-    discriminator.train()
     optim_discr.zero_grad()
 
     # src: [B, L], tgt: [B, L], lengths: [B]
     src, tgt, lengths = [obj.to(device) for obj in batch]
     batch_size = src.size(0)
 
-    noise = sample_noise(batch_size, generator.inp_size)
-    real_repr = autoencoder.encode(src, lengths, noise=False)  # [B, H]
+    noise = sample_noise(batch_size, generator.inp_size).to(device)
+    real_repr = autoencoder(src, lengths, encode_only=True, noise=False)  # [B, H]
     fake_repr = generator(noise)  # [B, H]
 
     real_discr_out = discriminator(real_repr.detach())  # [B, 1]
     fake_discr_out = discriminator(fake_repr.detach())
     discr_loss = (real_discr_out - fake_discr_out).mean()
+    discr_loss.backward()
 
+
+    print('-------------')
     gradient_penalty = calc_gradient_penalty(discriminator, real_repr, fake_repr, gan_gp_lambda, device)
-    (discr_loss + gradient_penalty).backward()  # basically: WGAN-GP
+    #(discr_loss + gradient_penalty).backward()  # basically: WGAN-GP
+    gradient_penalty.backward()
 
     optim_discr.step()
 
@@ -118,7 +122,7 @@ def train_encoder_by_discriminator(autoencoder, optim_ae, batch, grad_lambda, cl
     # src: [B, L], tgt: [B, L], lengths: [B]
     src, tgt, lengths = [obj.to(device) for obj in batch]
 
-    real_repr = autoencoder.encode(src, lengths, noise=False)
+    real_repr = autoencoder(src, lengths, encode_only=True, noise=False)
     real_repr.register_hook(lambda grad: grad * grad_lambda)
 
     discr_out = discriminator(real_repr)
@@ -130,12 +134,12 @@ def train_encoder_by_discriminator(autoencoder, optim_ae, batch, grad_lambda, cl
     return -discr_loss.cpu().item()
 
 
-def train_generator(generator, discriminator, optim_gen, batch_size):
+def train_generator(generator, discriminator, optim_gen, batch_size, device):
     generator.train()
     discriminator.eval()
     optim_gen.zero_grad()
 
-    noise = sample_noise(batch_size, generator.inp_size)
+    noise = sample_noise(batch_size, generator.inp_size).to(device)
     fake_repr = generator(noise)
     fake_discr_out = discriminator(fake_repr)
     fake_discr_loss = fake_discr_out.mean()
@@ -188,7 +192,7 @@ def train_epoch(models, optimizers, criterions, batchifier, args, epoch_idx, dev
                                                    args.clip)
                 for _ in range(niters_generator):
                     # loss = D(G(noise))
-                    gen_metrics = train_generator(generator, discriminator, optim_gen, args.batch_size)
+                    gen_metrics = train_generator(generator, discriminator, optim_gen, args.batch_size, device)
                     metrics.accum(gen_metrics)
         if batch_idx % args.print_every == 0:
             line = form_log_line(metrics)
