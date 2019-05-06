@@ -8,6 +8,7 @@ class Seq2Seq(nn.Module):
         super().__init__()
         self._noise_r = noise_r
         self.internal_repr_size = nhidden
+        self._device = None
         self.enc_embedding = nn.Embedding(ntokens, emsize)
         self.dec_embedding = nn.Embedding(ntokens, emsize)
         self.encoder = nn.LSTM(input_size=emsize, hidden_size=nhidden, num_layers=nlayers, dropout=dropout,
@@ -17,6 +18,9 @@ class Seq2Seq(nn.Module):
         self.linear = nn.Linear(nhidden, ntokens)
 
         self.init_weights()
+
+    def noise_anneal(self, alpha):
+        self._noise_r *= alpha
 
     @classmethod
     def from_opts(cls, opts):
@@ -100,12 +104,13 @@ class Seq2Seq(nn.Module):
         batch_size = internal_repr.size(0)
 
         # prepare a tensor for generated idxs
-        generated_idxs = torch.zeros(maxlen, batch_size)  # [L, B]
+        generated_idxs = torch.zeros(maxlen, batch_size, dtype=torch.long).to(self.device)  # [L, B]
         # set SOS as first token
         generated_idxs[0] = sos_idx
         # sos = torch.full((batch_size, 1), sos_idx)  # [B, 1]
 
-        state = torch.zeros(1, batch_size, self.nhidden)
+        state = (torch.zeros(1, batch_size, self.internal_repr_size).to(self.device),
+                 torch.zeros(1, batch_size, self.internal_repr_size).to(self.device))
         for token_idx in range(maxlen-1):
             cur_tokens = generated_idxs[token_idx].unsqueeze(1)  # [B, 1]
 
@@ -116,4 +121,13 @@ class Seq2Seq(nn.Module):
             decoded = self.linear(output.squeeze(1))  # [B, V]
             generated_idxs[token_idx+1] = self.sample_next_idxs(decoded, greedy)  # [B]
 
-        return generated_idxs.T
+        return generated_idxs.transpose(0,1)
+
+    @property
+    def device(self):
+        # lazy insta
+        if self._device:
+            return self._device
+        is_cuda = next(self.parameters()).is_cuda
+        self._device = torch.device('cuda' if is_cuda else 'cpu')
+        return self._device

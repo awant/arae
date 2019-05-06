@@ -2,7 +2,7 @@ from opts import configure_args
 from data import Corpus
 from batchifier import Batchifier
 from models import Seq2Seq, Gen, Critic, KenlmModel
-from models import sample_noise, generate_sentences
+from models import sample_noise, generate_sentences, dump_model
 import torch
 from torch import nn
 import torch.optim as optim
@@ -30,7 +30,7 @@ def form_log_line(metrics):
 
 def form_eval_log_line(metrics):
     metrics['ppl'] = math.exp(metrics['loss_ae'] / metrics['niter_clear'])  # wrong metric
-    metrics['acc'] = metrics['nmatches'] / metrics['ntokens']
+    metrics['acc'] = metrics['nmatches'] / metrics['ntokens'] * 100
     line = '[{epoch:3d}/{nepoch:3d}] | test ppl {ppl:8.2f} | test acc {acc:4.2f}'
     if metrics['forward_ppl'] > 0:
         line += ' | forward ppl {forward_ppl:8.2f}'
@@ -93,19 +93,16 @@ def train_discriminator(models, optim_discr, batch, gan_gp_lambda, device):
     batch_size = src.size(0)
 
     noise = sample_noise(batch_size, generator.inp_size).to(device)
-    real_repr = autoencoder(src, lengths, encode_only=True, noise=False)  # [B, H]
+    with torch.no_grad():
+        real_repr = autoencoder(src, lengths, encode_only=True, noise=False)  # [B, H]
     fake_repr = generator(noise)  # [B, H]
 
     real_discr_out = discriminator(real_repr.detach())  # [B, 1]
     fake_discr_out = discriminator(fake_repr.detach())
     discr_loss = (real_discr_out - fake_discr_out).mean()
-    discr_loss.backward()
 
-
-    print('-------------')
     gradient_penalty = calc_gradient_penalty(discriminator, real_repr, fake_repr, gan_gp_lambda, device)
-    #(discr_loss + gradient_penalty).backward()  # basically: WGAN-GP
-    gradient_penalty.backward()
+    (discr_loss + gradient_penalty).backward()  # basically: WGAN-GP
 
     optim_discr.step()
 
@@ -201,17 +198,24 @@ def train_epoch(models, optimizers, criterions, batchifier, args, epoch_idx, dev
 
         if batch_idx % anneal_noise_every == 0:
             autoencoder.noise_anneal(args.noise_anneal)
+        break
     batchifier.reset()
 
 
-def evaluate(models, criterions, batchifier, dictionary, kenlm, kenlm_eval_size=1000, maxlen=15):
+def evaluate(models, criterions, batchifier, dictionary, args, epoch_idx, kenlm, kenlm_eval_size=1000, maxlen=15):
+    show_reconstructions = True
+
     autoencoder, generator, discriminator = models
     criterion_ae, = criterions
     autoencoder.eval()
     generator.eval()
     discriminator.eval()
 
-    metrics = Metrics()
+    metrics = Metrics(
+        epoch=epoch_idx,
+        nepoch=args.epochs,
+        niter_clear=len(batchifier)
+    )
     with torch.no_grad():
         for batch in batchifier:
             src, tgt, lengths = [obj.to(device) for obj in batch]
@@ -220,27 +224,41 @@ def evaluate(models, criterions, batchifier, dictionary, kenlm, kenlm_eval_size=
             plain_out, plain_tgt = out.view(-1, out.size(-1)), tgt.view(-1)
             metrics['loss_ae'] += criterion_ae(plain_out, plain_tgt).cpu().item()
 
-            nmatches = (plain_out.argmax(dim=-1) == plain_tgt).float()*(plain_tgt == criterion_ae.ignore_index).float()
+            nmatches = (plain_out.argmax(dim=-1) == plain_tgt).float()*(plain_tgt != criterion_ae.ignore_index).float()
             metrics['nmatches'] += nmatches.sum().cpu().item()
             metrics['ntokens'] += lengths.sum().cpu().item()
+        batchifier.reset()
+
+    if show_reconstructions:
+        tgt_idxs, reconstr_idxs = tgt[:3].cpu().numpy(), out[:3].argmax(-1).cpu().numpy()
+        tgt_tokens = list([dictionary.convert_idxs2tokens_prettified(x) for x in tgt_idxs])
+        rec_tokens = list([dictionary.convert_idxs2tokens_prettified(x) for x in reconstr_idxs])
+        tgt_tokens = '\n    '.join([' '.join(tokens) for tokens in tgt_tokens])
+        rec_tokens = '\n    '.join([' '.join(tokens) for tokens in rec_tokens])
+        logger.debug('Orig sents:\n    '+tgt_tokens+'Reconstructions:\n    '+rec_tokens)
 
     if kenlm is not None:
         sentences = generate_sentences(autoencoder, generator, dictionary, count=kenlm_eval_size, maxlen=maxlen)
+        logger.debug('Generated sentences:\n     '+'\n    '.join(sentences[:5]))
         forward_ppl = kenlm.get_ppl(sentences)
         metrics['forward_ppl'] = forward_ppl
 
     line = form_eval_log_line(metrics)
     logger.info(line)
+    if kenlm:
+        return forward_ppl
+    return metrics['ppl']
 
 
-def train(models, optimizers, criterions, train_batchifier, test_batchifier, args, kenlm, maxlen, device):
+def train(models, dictionary, optimizers, criterions, train_batchifier, test_batchifier, args, kenlm, maxlen, device):
+    best_ppl = 1e10
     for epoch_idx in range(1, args.epochs+1):
         train_epoch(models, optimizers, criterions, train_batchifier, args, epoch_idx, device)
-        evaluate(models, criterions, test_batchifier, kenlm, maxlen)
-
-
-def dump_model():
-    pass
+        ppl = evaluate(models, criterions, test_batchifier, dictionary, args, epoch_idx, kenlm, maxlen)
+        if ppl < best_ppl:
+            best_ppl = ppl
+            logger.info('Dump best model by far for {} epoch'.format(epoch_idx))
+            dump_model(models, dictionary, args, args.save)
 
 
 if __name__ == '__main__':
@@ -250,8 +268,8 @@ if __name__ == '__main__':
     # Data
     logger.info('Building data...')
     corpus = Corpus(args.data, n_tokens=args.vocab_size)
-    vocab = corpus.dictionary
-    pad_idx = vocab.pad_idx
+    dictionary = corpus.dictionary
+    pad_idx = dictionary.pad_idx
     maxlen = corpus.maxlen
 
     logger.info('Building batchifier...')
@@ -265,7 +283,10 @@ if __name__ == '__main__':
     discriminator = Discriminator.from_opts(args).to(device)
     models = (autoencoder, generator, discriminator)
     # Kenlm model
-    kenlm = KenlmModel(args.kenlm_model) if args.kenlm_model else None
+    kenlm = None
+    if args.kenlm_model:
+        logger.info('Loading Kenlm model...')
+        kenlm = KenlmModel(args.kenlm_model)
 
     # Optimizers
     optim_ae = optim.SGD(autoencoder.parameters(), lr=args.lr_ae)
@@ -278,6 +299,5 @@ if __name__ == '__main__':
     criterions = (criterion_ae,)
 
     logger.info('Training...')
-    train(models, optimizers, criterions, train_batchifier, test_batchifier, args, kenlm, maxlen, device)
-    logger.info('Dumping model...')
-    dump_model()
+    train(models, dictionary, optimizers, criterions, train_batchifier, test_batchifier, args, kenlm, maxlen, device)
+
