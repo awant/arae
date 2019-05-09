@@ -163,13 +163,12 @@ def train_epoch(models, optimizers, criterions, batchifier, args, epoch_idx, dev
     anneal_noise_every = 100  # hardcoded for now
 
     def init_metrics():
-        metrics = Metrics(
+        return Metrics(
             epoch=epoch_idx,
             nepoch=args.epochs,
             niter=len(batchifier),
             niter_clear=args.print_every
         )
-        return metrics
 
     metrics = init_metrics()
     for batch_idx, batch in enumerate(batchifier, start=1):
@@ -179,13 +178,15 @@ def train_epoch(models, optimizers, criterions, batchifier, args, epoch_idx, dev
         if batch_idx % niters_autoencoder == 0:  # training GAN part
             for _ in range(niters_gan):
                 for _ in range(niters_discriminator):
+                    random_batch = batchifier.get_random()
                     # loss = (D(enc(src)) - D(G(noise))).mean() + GP
-                    discr_metrics = train_discriminator(models, optim_discr, batchifier.get_random(),
+                    discr_metrics = train_discriminator(models, optim_discr, random_batch,
                                                         args.gan_gp_lambda, device)
                     metrics.accum(discr_metrics)
                 for _ in range(niters_discr_autoencoder):
+                    random_batch = batchifier.get_random()
                     # loss = -D(enc(src))
-                    train_encoder_by_discriminator(autoencoder, optim_ae, batchifier.get_random(), args.grad_lambda,
+                    train_encoder_by_discriminator(autoencoder, optim_ae, random_batch, args.grad_lambda,
                                                    args.clip)
                 for _ in range(niters_generator):
                     # loss = D(G(noise))
@@ -198,11 +199,9 @@ def train_epoch(models, optimizers, criterions, batchifier, args, epoch_idx, dev
 
         if batch_idx % anneal_noise_every == 0:
             autoencoder.noise_anneal(args.noise_anneal)
-        break
-    batchifier.reset()
 
 
-def evaluate(models, criterions, batchifier, dictionary, args, epoch_idx, kenlm, kenlm_eval_size=1000, maxlen=15):
+def evaluate(models, criterions, batchifier, dictionary, args, epoch_idx, kenlm, kenlm_eval_size=100000, maxlen=15):
     show_reconstructions = True
 
     autoencoder, generator, discriminator = models
@@ -227,7 +226,6 @@ def evaluate(models, criterions, batchifier, dictionary, args, epoch_idx, kenlm,
             nmatches = (plain_out.argmax(dim=-1) == plain_tgt).float()*(plain_tgt != criterion_ae.ignore_index).float()
             metrics['nmatches'] += nmatches.sum().cpu().item()
             metrics['ntokens'] += lengths.sum().cpu().item()
-        batchifier.reset()
 
     if show_reconstructions:
         tgt_idxs, reconstr_idxs = tgt[:3].cpu().numpy(), out[:3].argmax(-1).cpu().numpy()
@@ -235,10 +233,10 @@ def evaluate(models, criterions, batchifier, dictionary, args, epoch_idx, kenlm,
         rec_tokens = list([dictionary.convert_idxs2tokens_prettified(x) for x in reconstr_idxs])
         tgt_tokens = '\n    '.join([' '.join(tokens) for tokens in tgt_tokens])
         rec_tokens = '\n    '.join([' '.join(tokens) for tokens in rec_tokens])
-        logger.debug('Orig sents:\n    '+tgt_tokens+'Reconstructions:\n    '+rec_tokens)
+        logger.debug('Orig sents:\n    '+tgt_tokens+'\nReconstructions:\n    '+rec_tokens)
 
     if kenlm is not None:
-        sentences = generate_sentences(autoencoder, generator, dictionary, count=kenlm_eval_size, maxlen=maxlen)
+        sentences = generate_sentences(autoencoder, generator, dictionary, count=kenlm_eval_size, maxlen=maxlen, greedy=False)
         logger.debug('Generated sentences:\n     '+'\n    '.join(sentences[:5]))
         forward_ppl = kenlm.get_ppl(sentences)
         metrics['forward_ppl'] = forward_ppl
