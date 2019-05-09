@@ -34,7 +34,16 @@ def form_eval_log_line(metrics):
     line = '[{epoch:3d}/{nepoch:3d}] | test ppl {ppl:8.2f} | test acc {acc:4.2f}'
     if metrics['forward_ppl'] > 0:
         line += ' | forward ppl {forward_ppl:8.2f}'
+    if metrics['reverse_ppl'] > 0:
+        line += ' | reverse ppl {reverse_ppl:8.2f}'
     return line.format(**metrics)
+
+
+def batches_to_sentences(batchifier, dictionary):
+    sentences = []
+    for src, _, _ in batchifier:
+        sentences += [dictionary.convert_idxs2tokens_prettified(line) for line in src]
+    return sentences
 
 
 def train_autoencoder(autoencoder, optim_ae, criterion_ae, batch, device):
@@ -84,8 +93,6 @@ def calc_gradient_penalty(discriminator, real_data, fake_data, gan_gp_lambda, de
 def train_discriminator(models, optim_discr, batch, gan_gp_lambda, device):
     autoencoder, generator, discriminator = models
     discriminator.train()
-    autoencoder.eval()
-    generator.eval()
     optim_discr.zero_grad()
 
     # src: [B, L], tgt: [B, L], lengths: [B]
@@ -113,7 +120,6 @@ def train_discriminator(models, optim_discr, batch, gan_gp_lambda, device):
 
 def train_encoder_by_discriminator(autoencoder, optim_ae, batch, grad_lambda, clip):
     autoencoder.train()
-    discriminator.eval()
     optim_ae.zero_grad()
 
     # src: [B, L], tgt: [B, L], lengths: [B]
@@ -133,7 +139,6 @@ def train_encoder_by_discriminator(autoencoder, optim_ae, batch, grad_lambda, cl
 
 def train_generator(generator, discriminator, optim_gen, batch_size, device):
     generator.train()
-    discriminator.eval()
     optim_gen.zero_grad()
 
     noise = sample_noise(batch_size, generator.inp_size).to(device)
@@ -236,15 +241,16 @@ def evaluate(models, criterions, batchifier, dictionary, args, epoch_idx, kenlm,
         logger.debug('Orig sents:\n    '+tgt_tokens+'\nReconstructions:\n    '+rec_tokens)
 
     if kenlm is not None:
-        sentences = generate_sentences(autoencoder, generator, dictionary, count=kenlm_eval_size, maxlen=maxlen, greedy=False)
-        logger.debug('Generated sentences:\n     '+'\n    '.join(sentences[:5]))
-        forward_ppl = kenlm.get_ppl(sentences)
-        metrics['forward_ppl'] = forward_ppl
+        sentences = generate_sentences(autoencoder, generator, dictionary, count=kenlm_eval_size, maxlen=maxlen, greedy=True)
+        logger.debug('Generated sentences:\n    '+'\n    '.join(sentences[:5]))
+        metrics['forward_ppl'] = kenlm.get_ppl(sentences)
+        gen_kenlm = KenlmModel.build(sentences)
+        if gen_kenlm:
+            test_sentences = batches_to_sentences(batchifier, dictionary)
+            metrics['reverse_ppl'] = gen_kenlm.get_ppl(test_sentences)
 
     line = form_eval_log_line(metrics)
     logger.info(line)
-    if kenlm:
-        return forward_ppl
     return metrics['ppl']
 
 

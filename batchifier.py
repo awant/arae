@@ -61,3 +61,4 @@ class Batchifier(object):
 
     def get_random(self):
         return random.choice(self.batches)
+
