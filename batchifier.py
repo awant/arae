@@ -32,8 +32,8 @@ class Batchifier(object):
         tgt = np.copy(src)
 
         for idx, (line, length) in enumerate(zip(batch, lengths)):
-            src[idx][:length] = line[1:]
-            tgt[idx][:length] = line[:-1]
+            src[idx][:length] = line[:-1]
+            tgt[idx][:length] = line[1:]
 
         src, tgt, lengths = torch.LongTensor(src), torch.LongTensor(tgt), torch.LongTensor(lengths)
         return src, tgt, lengths
@@ -54,6 +54,7 @@ class Batchifier(object):
         try:
             result = self.batches[self.current_idx]
         except IndexError:
+            self.reset()
             raise StopIteration
         self.current_idx += 1
         return result
