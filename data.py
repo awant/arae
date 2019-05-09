@@ -1,4 +1,5 @@
 import os
+import numpy as np
 import logging
 from utils import iget_line
 from collections import Counter
@@ -48,11 +49,11 @@ class Dictionary(object):
         :param idxs: list of indexes to convert
         :return: list of tokens
         '''
-        if not idxs:
-            return None
+        if not isinstance(idxs, np.ndarray):
+            idxs = np.array(idxs)
         try:
-            first_eos_idx = idxs.index(self.eos_idx)
-        except ValueError:
+            first_eos_idx = np.where(idxs == self.eos_idx)[0][0]
+        except IndexError:
             first_eos_idx = len(idxs)
         start_idx = 1 if idxs[0] == self.sos_idx else 0
         tokens = self.convert_idxs2tokens(idxs[start_idx:first_eos_idx])
@@ -118,6 +119,9 @@ class Corpus(object):
     def fill_dictionary(self, paths, n_tokens):
         all_tokens = []
         for label, path in paths.items():
+            if not os.path.exists(path):
+                logger.warning('Skip {} while filling dictionary'.format(path))
+                continue
             for line in iget_line(path):
                 tokens = line.split(self._sep)
                 all_tokens += tokens
@@ -126,6 +130,9 @@ class Corpus(object):
             self.dictionary.add_token(token)
 
     def tokenize(self, path):
+        if not os.path.exists(path):
+            logger.warning('Skip {} while tokenizing'.format(path))
+            return None
         lines_idxs = []
         for line in iget_line(path):
             tokens = line.split(self._sep)
@@ -133,3 +140,4 @@ class Corpus(object):
             lines_idxs.append(idxs)
             self.maxlen = max(self.maxlen, len(idxs))
         return lines_idxs
+
