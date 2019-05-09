@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from torch.nn.functional import softmax
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 
@@ -98,7 +99,8 @@ class Seq2Seq(nn.Module):
         '''
         if greedy:
             return torch.argmax(inp, -1)
-        return torch.multinomial(inp, 1)
+        probs = softmax(inp, dim=-1)
+        return probs.multinomial(1).squeeze(1)
 
     def generate(self, internal_repr, sos_idx, maxlen, greedy):
         batch_size = internal_repr.size(0)
@@ -107,7 +109,6 @@ class Seq2Seq(nn.Module):
         generated_idxs = torch.zeros(maxlen, batch_size, dtype=torch.long).to(self.device)  # [L, B]
         # set SOS as first token
         generated_idxs[0] = sos_idx
-        # sos = torch.full((batch_size, 1), sos_idx)  # [B, 1]
 
         state = (torch.zeros(1, batch_size, self.internal_repr_size).to(self.device),
                  torch.zeros(1, batch_size, self.internal_repr_size).to(self.device))
@@ -131,3 +132,4 @@ class Seq2Seq(nn.Module):
         is_cuda = next(self.parameters()).is_cuda
         self._device = torch.device('cuda' if is_cuda else 'cpu')
         return self._device
+

@@ -1,21 +1,31 @@
 import torch
+import numpy as np
 
 
 def sample_noise(batch_size, internal_repr_size):
     return torch.Tensor(batch_size, internal_repr_size).normal_(0, 1)
 
 
-def generate_sentences(autoencoder, generator, dictionary, count, maxlen, greedy=True, sep=' '):
-    is_cuda = next(generator.parameters()).is_cuda
-    device = torch.device('cuda' if is_cuda else 'cpu')
-    sos_idx = dictionary.sos_idx
-    if count > 3000:
-        raise RuntimeError("Batching is not implemented in generation yet")
+def _generate_batch(autoencoder, generator, batch_size, sos_idx, maxlen, greedy=True):
+    device = autoencoder.device
+
     with torch.no_grad():
-        noise = sample_noise(count, generator.inp_size).to(device)
-        fake_repr = generator(noise)  # [B, H]
-        lines = autoencoder.generate(fake_repr, sos_idx, maxlen, greedy)  # [B, L]
+        noise = sample_noise(batch_size, generator.inp_size).to(device)
+        fake_repr = generator(noise)
+        lines = autoencoder.generate(fake_repr, sos_idx, maxlen, greedy)
         lines = lines.cpu().numpy()
+    return lines
+
+
+def generate_sentences(autoencoder, generator, dictionary, count, maxlen, greedy=True, sep=' '):
+    batch_size = 5000
+    sos_idx = dictionary.sos_idx
+    lines = []
+    for batch_idx in range(0, count, batch_size):
+        batch_s = min(batch_size, count - batch_idx)
+        cur_lines = _generate_batch(autoencoder, generator, batch_s, sos_idx, maxlen, greedy)
+        lines.append(cur_lines)
+    lines = np.concatenate(lines, axis=1)
 
     convert_tokens2sents = lambda tokens: dictionary.convert_idxs2tokens_prettified(tokens)
     sentences = [sep.join(convert_tokens2sents(tokens)) for tokens in lines]
