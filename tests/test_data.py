@@ -3,6 +3,7 @@ import tempfile
 import os
 from tempfile import TemporaryDirectory
 from data import Dictionary, Corpus
+from batchifier import Batchifier
 
 
 def dump_sample_sentences():
@@ -13,12 +14,12 @@ def dump_sample_sentences():
     ]
     n_tokens = 10
 
-    tmpdirname = TemporaryDirectory()
-    with open(os.path.join(tmpdirname, 'train.txt'), 'w', encoding='utf-8') as f:
+    tmpdir = TemporaryDirectory()
+    with open(os.path.join(tmpdir.name, 'train.txt'), 'w', encoding='utf-8') as f:
         for sent in sents:
-            fd.write(sent+'\n')
+            f.write(sent+'\n')
 
-    return sents, n_tokens, tmpdirname
+    return sents, n_tokens, tmpdir
 
 
 def test_dictionary():
@@ -40,7 +41,30 @@ def test_dictionary():
 
 
 def test_corpus():
-    sents, n_tokens, path = dump_sample_sentences()
-    corpus = Corpus(path, n_tokens)
+    sents, n_tokens, dir_ = dump_sample_sentences()
+    tokens = [sent.split(' ') for sent in sents]
+    corpus = Corpus(dir_.name, n_tokens)
 
+    assert len(corpus.dictionary) == n_tokens
+    assert corpus.maxlen == max(list(map(len, tokens)))+2  # +2 for <sos>, <eos>
+    assert len(corpus.train) == len(sents)
+    assert corpus.train[0][0] == corpus.dictionary.sos_idx
+    assert corpus.train[0][-1] == corpus.dictionary.eos_idx
+    assert corpus.test is None
+
+
+def test_batchifier():
+    sents, n_tokens, dir_ = dump_sample_sentences()
+    tokens = [sent.split(' ') for sent in sents]
+    corpus = Corpus(dir_.name, n_tokens)
+    d = corpus.dictionary
+
+    batchifier = Batchifier(corpus.train, d.pad_idx, batch_size=2)
+    assert len(batchifier) == (len(sents) // 2)
+
+    for src, tgt, lengths in batchifier:
+        assert src[0][0] == d.sos_idx
+        assert tgt[0][-1] == d.eos_idx
+        assert ((src != d.pad_idx).long().sum(1) == lengths).all()
+        assert ((tgt != d.pad_idx).long().sum(1) == lengths).all()
 
