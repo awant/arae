@@ -1,0 +1,4 @@
+torch==1.0.1
+pytest==4.4.2
+numpy==1.14.5
+kenlm==0.0.0
