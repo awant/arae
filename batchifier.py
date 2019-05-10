@@ -5,18 +5,20 @@ import torch
 
 class Batchifier(object):
     def __init__(self, idxs, pad_idx, batch_size, shuffle=False):
-        if shuffle:
-            raise RuntimeError("Not implemented yet")
+        self.idxs = idxs
+        self.shuffle = shuffle
 
         self.batch_size = batch_size
         self.nbatches = len(idxs) // batch_size
         self.pad_idx = pad_idx
         self.current_idx = None
-        self.batches = []
-        self._build_data(idxs)
+        self.batches = None
         self.reset()
 
     def reset(self):
+        if self.shuffle:
+            random.shuffle(self.idxs)
+        self._build_data(self.idxs)
         self.current_idx = 0
 
     def _sort_batch(self, batch):
@@ -39,6 +41,7 @@ class Batchifier(object):
         return src, tgt, lengths
 
     def _build_data(self, idxs):
+        self.batches = []
         for batch_idx in range(self.nbatches):
             batch = idxs[batch_idx*self.batch_size: (batch_idx+1)*self.batch_size]
             src, tgt, lengths = self._sort_batch(batch)  # should sort batches to pass into lstm with padding
