@@ -248,6 +248,7 @@ def evaluate(models, criterions, batchifier, dictionary, args, epoch_idx, kenlm,
         if gen_kenlm:
             test_sentences = batches_to_sentences(batchifier, dictionary)
             metrics['reverse_ppl'] = gen_kenlm.get_ppl(test_sentences)
+        del gen_kenlm
 
     line = form_eval_log_line(metrics)
     logger.info(line)
@@ -277,7 +278,7 @@ if __name__ == '__main__':
     maxlen = corpus.maxlen
 
     logger.info('Building batchifier...')
-    train_batchifier = Batchifier(corpus.train, pad_idx, args.batch_size)
+    train_batchifier = Batchifier(corpus.train, pad_idx, args.batch_size, shuffle=True)
     test_batchifier = Batchifier(corpus.test, pad_idx, args.batch_size)
 
     # Model
