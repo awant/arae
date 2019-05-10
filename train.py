@@ -9,12 +9,22 @@ import torch.optim as optim
 import logging
 from utils import Metrics
 import math
+import numpy as np
+import random
+
 
 # Global sets
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 Autoencoder, Generator, Discriminator = Seq2Seq, Gen, Critic
+
+
+def set_seeds(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
 
 
 def form_log_line(metrics):
@@ -41,8 +51,8 @@ def form_eval_log_line(metrics):
 
 def batches_to_sentences(batchifier, dictionary):
     sentences = []
-    for src, _, _ in batchifier:
-        sentences += [dictionary.convert_idxs2tokens_prettified(line) for line in src]
+    for _, tgt, _ in batchifier:
+        sentences += [' '.join(dictionary.convert_idxs2tokens_prettified(line)) for line in tgt]
     return sentences
 
 
@@ -259,7 +269,7 @@ def train(models, dictionary, optimizers, criterions, train_batchifier, test_bat
     best_ppl = 1e10
     for epoch_idx in range(1, args.epochs+1):
         train_epoch(models, optimizers, criterions, train_batchifier, args, epoch_idx, device)
-        ppl = evaluate(models, criterions, test_batchifier, dictionary, args, epoch_idx, kenlm, maxlen)
+        ppl = evaluate(models, criterions, test_batchifier, dictionary, args, epoch_idx, kenlm, maxlen=maxlen)
         if ppl < best_ppl:
             best_ppl = ppl
             logger.info('Dump best model by far for {} epoch'.format(epoch_idx))
@@ -269,6 +279,7 @@ def train(models, dictionary, optimizers, criterions, train_batchifier, test_bat
 if __name__ == '__main__':
     args = configure_args()
     device = torch.device('cuda' if args.gpu > -1 else 'cpu')
+    set_seeds(args.seed)
 
     # Data
     logger.info('Building data...')

@@ -43,10 +43,11 @@ def configure_args():
     parser.add_argument('--N', type=int, default=5, help='N-gram order for training n-gram language model')
     parser.add_argument('--log_interval', type=int, default=200, help='interval to log autoencoder training results')
 
-    parser.add_argument('--seed', type=int, default=1111, help='random seed')
+    parser.add_argument('--seed', type=int, default=41, help='random seed')
 
     parser.add_argument('--kenlm_model', type=str, help='path to reference kenlm model for computing forward ppl')
     parser.add_argument('--gpu', type=int, default=-1, help='device to use. = -1 - don\'t use gpu')
     parser.add_argument('--print_every', type=int, default=200, help='show metrics for train dataset')
 
     return parser.parse_args()
+
