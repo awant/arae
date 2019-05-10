@@ -46,8 +46,10 @@ def configure_args():
     parser.add_argument('--seed', type=int, default=41, help='random seed')
 
     parser.add_argument('--kenlm_model', type=str, help='path to reference kenlm model for computing forward ppl')
+    parser.add_argument('--compressing_rate', type=int, default=20, help='used as -S param for building kenlm model')
     parser.add_argument('--gpu', type=int, default=-1, help='device to use. = -1 - don\'t use gpu')
     parser.add_argument('--print_every', type=int, default=200, help='show metrics for train dataset')
+    parser.add_argument('--tensorboard', action='store_true', help='use tensorboardx')
 
     return parser.parse_args()
 

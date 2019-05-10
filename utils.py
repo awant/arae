@@ -39,3 +39,11 @@ class Metrics(defaultdict):
             self._accum_dict(arg)
         self._accum_dict(kwargs)
 
+
+def static_vars(**kwargs):
+    def decorate(func):
+        for k in kwargs:
+            setattr(func, k, kwargs[k])
+        return func
+    return decorate
+

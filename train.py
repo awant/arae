@@ -7,7 +7,7 @@ import torch
 from torch import nn
 import torch.optim as optim
 import logging
-from utils import Metrics
+from utils import Metrics, static_vars
 import math
 import numpy as np
 import random
@@ -18,6 +18,7 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 Autoencoder, Generator, Discriminator = Seq2Seq, Gen, Critic
+tb_writer = None
 
 
 def set_seeds(seed):
@@ -27,6 +28,19 @@ def set_seeds(seed):
     torch.cuda.manual_seed(seed)
 
 
+def configure_tb_writer(used):
+    if used:
+        from tensorboardX import SummaryWriter
+        writer = SummaryWriter()
+    else:
+        class DummyWriter(object):
+            def __getattr__(self, attr):
+                return lambda *args, **kwargs: None
+        writer = DummyWriter()
+    return writer
+
+
+@static_vars(niter=0)
 def form_log_line(metrics):
     metrics['ppl'] = math.exp(metrics['loss_ae'] / metrics['niter_clear'])  # wrong metric
     metrics['acc'] = metrics['nmatches'] / metrics['ntokens'] * 100
@@ -35,9 +49,14 @@ def form_log_line(metrics):
     line = '[{epoch:3d}/{nepoch:3d}][{iter:5d}/{niter:5d}] | ' \
            'ppl {ppl:8.2f} | acc {acc:4.2f} | '\
            'loss_d {loss_d:.3f} | loss_g {loss_g:.3f}'.format(**metrics)
+    tb_writer.add_scalar('train/acc', metrics['acc'], form_log_line.niter)
+    tb_writer.add_scalar('train/loss_d', metrics['loss_d'], form_log_line.niter)
+    tb_writer.add_scalar('train/loss_g', metrics['loss_g'], form_log_line.niter)
+    form_log_line.niter += 1
     return line
 
 
+@static_vars(niter=0)
 def form_eval_log_line(metrics):
     metrics['ppl'] = math.exp(metrics['loss_ae'] / metrics['niter_clear'])  # wrong metric
     metrics['acc'] = metrics['nmatches'] / metrics['ntokens'] * 100
@@ -46,6 +65,10 @@ def form_eval_log_line(metrics):
         line += ' | forward ppl {forward_ppl:8.2f}'
     if metrics['reverse_ppl'] > 0:
         line += ' | reverse ppl {reverse_ppl:8.2f}'
+    tb_writer.add_scalar('test/acc', metrics['acc'], form_eval_log_line.niter)
+    tb_writer.add_scalar('test/forward_ppl', metrics['forward_ppl'], form_eval_log_line.niter)
+    tb_writer.add_scalar('test/reverse_ppl', metrics['reverse_ppl'], form_eval_log_line.niter)
+    form_eval_log_line.niter += 1
     return line.format(**metrics)
 
 
@@ -254,7 +277,7 @@ def evaluate(models, criterions, batchifier, dictionary, args, epoch_idx, kenlm,
         sentences = generate_sentences(autoencoder, generator, dictionary, count=kenlm_eval_size, maxlen=maxlen, greedy=True)
         logger.debug('Generated sentences:\n    '+'\n    '.join(sentences[:5]))
         metrics['forward_ppl'] = kenlm.get_ppl(sentences)
-        gen_kenlm = KenlmModel.build(sentences)
+        gen_kenlm = KenlmModel.build(sentences, compressing_rate=args.compressing_rate)
         if gen_kenlm:
             test_sentences = batches_to_sentences(batchifier, dictionary)
             metrics['reverse_ppl'] = gen_kenlm.get_ppl(test_sentences)
@@ -280,6 +303,7 @@ if __name__ == '__main__':
     args = configure_args()
     device = torch.device('cuda' if args.gpu > -1 else 'cpu')
     set_seeds(args.seed)
+    tb_writer = configure_tb_writer(args.tensorboard)  # tensorboardx
 
     # Data
     logger.info('Building data...')
@@ -316,4 +340,7 @@ if __name__ == '__main__':
 
     logger.info('Training...')
     train(models, dictionary, optimizers, criterions, train_batchifier, test_batchifier, args, kenlm, maxlen, device)
+
+    tb_writer.export_scalars_to_json("./metrics.json")
+    tb_writer.close()
 
